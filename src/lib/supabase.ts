@@ -1,4 +1,3 @@
-
 export const SUPABASE_URL =
   import.meta.env.VITE_SUPABASE_URL || "";
 
@@ -30,6 +29,9 @@ function headers(
   };
 }
 
+/**
+ * Sign in with Supabase Auth.
+ */
 export async function signIn(
   email: string,
   password: string
@@ -77,10 +79,15 @@ export async function signIn(
   return sessionData;
 }
 
+/**
+ * Get the current stored session.
+ */
 export function getSession(): Session | null {
   const raw = localStorage.getItem(sessionKey);
 
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
 
   try {
     const session: Session = JSON.parse(raw);
@@ -105,6 +112,9 @@ export function getSession(): Session | null {
 
 export const getsession = getSession;
 
+/**
+ * Sign out.
+ */
 export function signOut() {
   localStorage.removeItem(sessionKey);
 }
@@ -140,6 +150,7 @@ export async function verifyAdmin(
         userRes.status === 401
       ) {
         signOut();
+
         throw new Error(
           "Session expired. Please sign in again."
         );
@@ -176,6 +187,7 @@ export async function verifyAdmin(
         adminRes.status === 401
       ) {
         signOut();
+
         throw new Error(
           "Session expired. Please sign in again."
         );
@@ -207,7 +219,8 @@ export async function verifyAdmin(
 }
 
 /**
- * Get the current authenticated user's Authorization header.
+ * Get the current authenticated user's
+ * Authorization header.
  */
 function authHeader(): Record<string, string> {
   const session = getSession();
@@ -244,7 +257,9 @@ export async function get(path: string) {
 
     throw new Error(
       `GET ${path} failed: ${
-        body?.message || res.statusText
+        body?.message ||
+        body?.details ||
+        res.statusText
       }`
     );
   }
@@ -336,6 +351,9 @@ export async function patch(
 
 /**
  * DELETE
+ *
+ * Uses return=minimal because DELETE may not
+ * return a JSON response body.
  */
 export async function remove(path: string) {
   if (!supabaseConfigured) {
@@ -346,7 +364,10 @@ export async function remove(path: string) {
     `${SUPABASE_URL}/rest/v1/${path}`,
     {
       method: "DELETE",
-      headers: headers(authHeader()),
+      headers: headers({
+        ...authHeader(),
+        Prefer: "return=minimal",
+      }),
     }
   );
 
@@ -364,5 +385,73 @@ export async function remove(path: string) {
     );
   }
 
-  return res.json();
+  return true;
+}
+
+/**
+ * Get the church associated with the currently
+ * authenticated admin user.
+ *
+ * Relationship:
+ *
+ * Supabase Auth user
+ *        ↓
+ * admin_users.user_id
+ *        ↓
+ * admin_users.church_id
+ *
+ * No church ID is hardcoded here.
+ */
+export async function getCurrentChurchId(): Promise<number> {
+  const session = getSession();
+
+  if (!session?.access_token) {
+    throw new Error(
+      "Your session has expired. Please sign in again."
+    );
+  }
+
+  const userId = session.user?.id;
+
+  if (!userId) {
+    throw new Error(
+      "Unable to determine the current user."
+    );
+  }
+
+  const admins = await get(
+    `admin_users?user_id=eq.${encodeURIComponent(
+      userId
+    )}&active=eq.true&select=church_id`
+  );
+
+  if (
+    !Array.isArray(admins) ||
+    admins.length === 0
+  ) {
+    throw new Error(
+      "No active admin record was found for this user."
+    );
+  }
+
+  const churchId = admins[0]?.church_id;
+
+  if (
+    churchId === null ||
+    churchId === undefined
+  ) {
+    throw new Error(
+      "Your admin account is not associated with a church."
+    );
+  }
+
+  const numericChurchId = Number(churchId);
+
+  if (!Number.isFinite(numericChurchId)) {
+    throw new Error(
+      "The church ID associated with your admin account is invalid."
+    );
+  }
+
+  return numericChurchId;
 }

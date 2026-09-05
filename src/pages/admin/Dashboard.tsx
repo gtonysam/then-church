@@ -1,4 +1,3 @@
-
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import Messages from "./Messages";
@@ -20,6 +19,7 @@ import {
 } from "@/context/SiteContentContext";
 
 import {
+  SUPABASE_URL,
   get,
   patch,
   post,
@@ -27,9 +27,9 @@ import {
   getSession,
   signOut,
   verifyAdmin,
+  getCurrentChurchId,
 } from "@/lib/supabase";
 
-const SUPABASE_URL = "https://tzexxiotdtmhjhqbyuna.supabase.co";
 const HERO_BUCKET = "site-assets";
 
 const groups: Record<string, string[]> = {
@@ -164,7 +164,9 @@ function HeroImageUploader({
     const session = getSession();
 
     if (!session?.access_token) {
-      setUploadError("Your admin session has expired. Please sign in again.");
+      setUploadError(
+        "Your admin session has expired. Please sign in again."
+      );
       return;
     }
 
@@ -173,7 +175,6 @@ function HeroImageUploader({
       return;
     }
 
-    // 10 MB limit
     if (file.size > 10 * 1024 * 1024) {
       setUploadError("Image must be smaller than 10 MB.");
       return;
@@ -207,12 +208,13 @@ function HeroImageUploader({
 
         try {
           const errorData = await response.json();
+
           errorMessage =
             errorData?.message ||
             errorData?.error ||
             errorMessage;
         } catch {
-          // ignore JSON parsing error
+          // Ignore JSON parsing error.
         }
 
         throw new Error(errorMessage);
@@ -224,7 +226,10 @@ function HeroImageUploader({
       onChange(publicUrl);
     } catch (error: any) {
       console.error("Hero image upload error:", error);
-      setUploadError(error?.message || "Failed to upload image.");
+
+      setUploadError(
+        error?.message || "Failed to upload image."
+      );
     } finally {
       setUploading(false);
     }
@@ -252,6 +257,7 @@ function HeroImageUploader({
           <div className="absolute top-3 right-3 flex gap-2">
             <label className="cursor-pointer inline-flex items-center gap-2 bg-black/70 text-white px-3 py-2 rounded-lg text-sm hover:bg-black/80">
               <Upload className="w-4 h-4" />
+
               {uploading ? "Uploading..." : "Replace"}
 
               <input
@@ -287,7 +293,9 @@ function HeroImageUploader({
           <ImageIcon className="w-10 h-10 mx-auto mb-3 text-muted-foreground" />
 
           <p className="font-semibold text-sm">
-            {uploading ? "Uploading image..." : "Upload hero image"}
+            {uploading
+              ? "Uploading image..."
+              : "Upload hero image"}
           </p>
 
           <p className="text-xs text-muted-foreground mt-1">
@@ -320,14 +328,16 @@ function HeroImageUploader({
 
       {value && (
         <div className="text-xs text-muted-foreground break-all">
-          <span className="font-semibold">Image URL:</span> {value}
+          <span className="font-semibold">Image URL:</span>{" "}
+          {value}
         </div>
       )}
 
       <p className="text-xs text-muted-foreground">
         The image will be uploaded to Supabase Storage. Click
         <strong> Save content </strong>
-        after selecting the image to permanently save it as the website hero.
+        after selecting the image to permanently save it as the website
+        hero.
       </p>
     </div>
   );
@@ -343,29 +353,46 @@ export default function AdminDashboard() {
     refresh,
   } = useSiteContent();
 
-  const [authed, setAuthed] = useState<boolean | null>(null);
+  const [authed, setAuthed] =
+    useState<boolean | null>(null);
 
   const [tab, setTab] = useState("Site");
 
   const [draft, setDraft] = useState(content);
 
-  const [sch, setSch] = useState<ScheduleItem[]>(schedule);
-  const [ev, setEv] = useState<EventItem[]>(events);
+  const [sch, setSch] =
+    useState<ScheduleItem[]>(schedule);
+
+  const [ev, setEv] =
+    useState<EventItem[]>(events);
 
   const [saving, setSaving] = useState(false);
+
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    const s = getSession();
+    const checkAdmin = async () => {
+      const session = getSession();
 
-    if (!s) {
-      setAuthed(false);
-      return;
-    }
+      if (!session) {
+        setAuthed(false);
+        return;
+      }
 
-    verifyAdmin(s.access_token)
-      .then(setAuthed)
-      .catch(() => setAuthed(false));
+      try {
+        const valid = await verifyAdmin(
+          session.access_token
+        );
+
+        setAuthed(valid);
+      } catch (error) {
+        console.error("Admin authentication error:", error);
+
+        setAuthed(false);
+      }
+    };
+
+    checkAdmin();
   }, []);
 
   useEffect(() => {
@@ -394,14 +421,34 @@ export default function AdminDashboard() {
   }
 
   if (!authed) {
-    return <Navigate to="/admin/login" replace />;
+    return (
+      <Navigate
+        to="/admin/login"
+        replace
+      />
+    );
   }
 
+  /**
+   * Save website content.
+   *
+   * The current church is determined from:
+   *
+   * authenticated user
+   *        ↓
+   * admin_users
+   *        ↓
+   * church_id
+   *        ↓
+   * site_content
+   */
   const saveContent = async () => {
     const session = getSession();
 
-    if (!session) {
-      setMessage("Your session has expired. Please sign in again.");
+    if (!session?.access_token) {
+      setMessage(
+        "Your session has expired. Please sign in again."
+      );
       return;
     }
 
@@ -409,27 +456,84 @@ export default function AdminDashboard() {
     setMessage("");
 
     try {
-   await patch("site_content?id=eq.1", {
-  content: draft,
-  updated_at: new Date().toISOString(),
-});
+      const churchId =
+        await getCurrentChurchId();
+
+      console.log(
+        "Saving content for church:",
+        churchId
+      );
+
+      /**
+       * Find this church's site_content row.
+       *
+       * No hardcoded row ID is used.
+       */
+      const rows = await get(
+        `site_content?church_id=eq.${churchId}&select=id&limit=1`
+      );
+
+      if (!Array.isArray(rows) || rows.length === 0) {
+        throw new Error(
+          "No site content record exists for this church."
+        );
+      }
+
+      const siteContentId = rows[0]?.id;
+
+      if (
+        siteContentId === null ||
+        siteContentId === undefined
+      ) {
+        throw new Error(
+          "Unable to determine the site content record."
+        );
+      }
+
+      await patch(
+        `site_content?id=eq.${encodeURIComponent(
+          String(siteContentId)
+        )}&church_id=eq.${churchId}`,
+        {
+          content: draft,
+          updated_at:
+            new Date().toISOString(),
+        }
+      );
 
       await refresh();
 
-      setMessage("Content saved successfully.");
+      setMessage(
+        "Content saved successfully."
+      );
     } catch (e: any) {
-      console.error(e);
-      setMessage(e?.message || "Failed to save content.");
+      console.error(
+        "SAVE CONTENT ERROR:",
+        e
+      );
+
+      setMessage(
+        e?.message ||
+          "Failed to save content."
+      );
     } finally {
       setSaving(false);
     }
   };
 
+  /**
+   * Save weekly schedule.
+   *
+   * Only the current church's rows are deleted.
+   * New rows receive the current church_id.
+   */
   const saveSchedules = async () => {
     const session = getSession();
 
-    if (!session) {
-      setMessage("Your session has expired. Please sign in again.");
+    if (!session?.access_token) {
+      setMessage(
+        "Your session has expired. Please sign in again."
+      );
       return;
     }
 
@@ -437,63 +541,188 @@ export default function AdminDashboard() {
     setMessage("");
 
     try {
-     await remove("schedule_items?id=not.is.null");
+      const churchId =
+        await getCurrentChurchId();
 
-      const payload = sch.map((x, i) => ({
-        ...x,
-        id: undefined,
-        sort_order: i,
-      }));
-
-      if (payload.length) {
-       await post("schedule_items", payload);
-      }
-
-      await refresh();
-
-      setMessage("Schedule saved.");
-    } catch (e: any) {
-      setMessage(e?.message || "Failed to save schedule.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const saveEvents = async () => {
-    const session = getSession();
-
-    if (!session) {
-      setMessage("Your session has expired. Please sign in again.");
-      return;
-    }
-
-    setSaving(true);
-    setMessage("");
-
-    try {
-      await remove(
-        "events?id=not.is.null"
+      console.log(
+        "Saving schedule for church:",
+        churchId
       );
 
-      const payload = ev.map((x, i) => ({
-        ...x,
-        id: undefined,
-        sort_order: i,
-      }));
+      /**
+       * Delete ONLY this church's schedule.
+       */
+      await remove(
+        `schedule_items?church_id=eq.${churchId}`
+      );
 
-      if (payload.length) {
+      /**
+       * Build a clean database payload.
+       *
+       * Do not send the existing UUID.
+       * Supabase generates a new one.
+       */
+      const payload = sch.map(
+        (x, i) => ({
+          church_id: churchId,
+
+          day: x.day || "",
+
+          time: x.time || "",
+
+          name_en:
+            x.name_en || "",
+
+          name_ta:
+            x.name_ta || "",
+
+          location_en:
+            x.location_en || "",
+
+          location_ta:
+            x.location_ta || "",
+
+          sort_order: i,
+        })
+      );
+
+      console.log(
+        "Schedule payload:",
+        payload
+      );
+
+      if (payload.length > 0) {
         await post(
-          "events",
-          payload,
-          session.access_token
+          "schedule_items",
+          payload
         );
       }
 
       await refresh();
 
-      setMessage("Events saved.");
+      setMessage(
+        "Schedule saved successfully."
+      );
     } catch (e: any) {
-      setMessage(e?.message || "Failed to save events.");
+      console.error(
+        "SAVE SCHEDULE ERROR:",
+        e
+      );
+
+      setMessage(
+        e?.message ||
+          e?.details ||
+          "Failed to save schedule."
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /**
+   * Save events.
+   *
+   * Only the current church's events are deleted.
+   * New events receive the current church_id.
+   */
+  const saveEvents = async () => {
+    const session = getSession();
+
+    if (!session?.access_token) {
+      setMessage(
+        "Your session has expired. Please sign in again."
+      );
+      return;
+    }
+
+    setSaving(true);
+    setMessage("");
+
+    try {
+      const churchId =
+        await getCurrentChurchId();
+
+      console.log(
+        "Saving events for church:",
+        churchId
+      );
+
+      /**
+       * Delete ONLY this church's events.
+       */
+      await remove(
+        `events?church_id=eq.${churchId}`
+      );
+
+      /**
+       * Build a clean payload.
+       */
+      const payload = ev.map(
+        (x, i) => ({
+          church_id: churchId,
+
+          event_date:
+            x.event_date || "",
+
+          title_en:
+            x.title_en || "",
+
+          title_ta:
+            x.title_ta || "",
+
+          time_en:
+            x.time_en || "",
+
+          time_ta:
+            x.time_ta || "",
+
+          location_en:
+            x.location_en || "",
+
+          location_ta:
+            x.location_ta || "",
+
+          description_en:
+            x.description_en || "",
+
+          description_ta:
+            x.description_ta || "",
+
+          featured:
+            Boolean(x.featured),
+
+          sort_order: i,
+        })
+      );
+
+      console.log(
+        "Events payload:",
+        payload
+      );
+
+      if (payload.length > 0) {
+        await post(
+          "events",
+          payload
+        );
+      }
+
+      await refresh();
+
+      setMessage(
+        "Events saved successfully."
+      );
+    } catch (e: any) {
+      console.error(
+        "SAVE EVENTS ERROR:",
+        e
+      );
+
+      setMessage(
+        e?.message ||
+          e?.details ||
+          "Failed to save events."
+      );
     } finally {
       setSaving(false);
     }
@@ -501,17 +730,24 @@ export default function AdminDashboard() {
 
   const logout = () => {
     signOut();
-    nav("/admin/login", { replace: true });
+
+    nav(
+      "/admin/login",
+      {
+        replace: true,
+      }
+    );
   };
 
   const tabs = [
     ...Object.keys(groups),
     "Weekly Schedule",
-    "Events",
+    //"Events",
     "Messages",
   ];
 
-  const heroImage = draft["site.heroImage"] || "";
+  const heroImage =
+    draft["site.heroImage"] || "";
 
   return (
     <div className="min-h-screen bg-muted">
@@ -588,7 +824,10 @@ export default function AdminDashboard() {
                 className="bg-gold px-5 py-2.5 rounded-full font-bold"
               >
                 <Save className="inline w-4 h-4 mr-1" />
-                {saving ? "Saving…" : "Save schedule"}
+
+                {saving
+                  ? "Saving…"
+                  : "Save schedule"}
               </button>
             ) : tab === "Events" ? (
               <button
@@ -597,16 +836,22 @@ export default function AdminDashboard() {
                 className="bg-gold px-5 py-2.5 rounded-full font-bold"
               >
                 <Save className="inline w-4 h-4 mr-1" />
-                {saving ? "Saving…" : "Save events"}
+
+                {saving
+                  ? "Saving…"
+                  : "Save events"}
               </button>
-            ) : (
+            ) : tab === "Messages" ? null : (
               <button
                 onClick={saveContent}
                 disabled={saving}
                 className="bg-gold px-5 py-2.5 rounded-full font-bold"
               >
                 <Save className="inline w-4 h-4 mr-1" />
-                {saving ? "Saving…" : "Save content"}
+
+                {saving
+                  ? "Saving…"
+                  : "Save content"}
               </button>
             )}
           </div>
@@ -617,8 +862,11 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {tab === "Messages" && <Messages />}
-          
+          {/* MESSAGES */}
+          {tab === "Messages" && (
+            <Messages />
+          )}
+
           {/* SITE */}
           {tab === "Site" && (
             <div className="space-y-7">
@@ -629,7 +877,9 @@ export default function AdminDashboard() {
                 </label>
 
                 <Input
-                  value={draft["site.name"] || ""}
+                  value={
+                    draft["site.name"] || ""
+                  }
                   onChange={(v) =>
                     setDraft((d) => ({
                       ...d,
@@ -644,7 +894,9 @@ export default function AdminDashboard() {
                   </label>
 
                   <Input
-                    value={draft["ta.site.name"] || ""}
+                    value={
+                      draft["ta.site.name"] || ""
+                    }
                     onChange={(v) =>
                       setDraft((d) => ({
                         ...d,
@@ -655,7 +907,7 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
-              {/* Hero image uploader */}
+              {/* Hero image */}
               <HeroImageUploader
                 value={heroImage}
                 onChange={(url) =>
@@ -669,49 +921,56 @@ export default function AdminDashboard() {
           )}
 
           {/* OTHER CONTENT GROUPS */}
-          {groups[tab] && tab !== "Site" && (
-            <div className="grid md:grid-cols-2 gap-5">
-              {keys.map((key) => (
-                <div key={key}>
-                  <label className="block text-xs uppercase tracking-wider text-muted-foreground mb-1.5">
-                    {key}
-                  </label>
-
-                  <Input
-                    value={
-                      draft[`en.${key}`] || ""
-                    }
-                    onChange={(v) =>
-                      setDraft((d) => ({
-                        ...d,
-                        [`en.${key}`]: v,
-                      }))
-                    }
-                    multiline={isLong(key)}
-                  />
-
-                  <div className="mt-2">
-                    <label className="block text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
-                      Tamil
+          {groups[tab] &&
+            tab !== "Site" && (
+              <div className="grid md:grid-cols-2 gap-5">
+                {keys.map((key) => (
+                  <div key={key}>
+                    <label className="block text-xs uppercase tracking-wider text-muted-foreground mb-1.5">
+                      {key}
                     </label>
 
                     <Input
                       value={
-                        draft[`ta.${key}`] || ""
+                        draft[
+                          `en.${key}`
+                        ] || ""
                       }
                       onChange={(v) =>
                         setDraft((d) => ({
                           ...d,
-                          [`ta.${key}`]: v,
+                          [`en.${key}`]:
+                            v,
                         }))
                       }
                       multiline={isLong(key)}
                     />
+
+                    <div className="mt-2">
+                      <label className="block text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
+                        Tamil
+                      </label>
+
+                      <Input
+                        value={
+                          draft[
+                            `ta.${key}`
+                          ] || ""
+                        }
+                        onChange={(v) =>
+                          setDraft((d) => ({
+                            ...d,
+                            [`ta.${key}`]:
+                              v,
+                          }))
+                        }
+                        multiline={isLong(key)}
+                      />
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
 
           {/* WEEKLY SCHEDULE */}
           {tab === "Weekly Schedule" && (
@@ -727,7 +986,10 @@ export default function AdminDashboard() {
                       setSch((a) =>
                         a.map((z, j) =>
                           j === i
-                            ? { ...z, day: v }
+                            ? {
+                                ...z,
+                                day: v,
+                              }
                             : z
                         )
                       )
@@ -740,7 +1002,10 @@ export default function AdminDashboard() {
                       setSch((a) =>
                         a.map((z, j) =>
                           j === i
-                            ? { ...z, time: v }
+                            ? {
+                                ...z,
+                                time: v,
+                              }
                             : z
                         )
                       )
@@ -753,7 +1018,10 @@ export default function AdminDashboard() {
                       setSch((a) =>
                         a.map((z, j) =>
                           j === i
-                            ? { ...z, name_en: v }
+                            ? {
+                                ...z,
+                                name_en: v,
+                              }
                             : z
                         )
                       )
@@ -766,7 +1034,10 @@ export default function AdminDashboard() {
                       setSch((a) =>
                         a.map((z, j) =>
                           j === i
-                            ? { ...z, name_ta: v }
+                            ? {
+                                ...z,
+                                name_ta: v,
+                              }
                             : z
                         )
                       )
@@ -806,36 +1077,48 @@ export default function AdminDashboard() {
                   />
 
                   <button
+                    type="button"
                     onClick={() =>
                       setSch((a) =>
-                        a.filter((_, j) => j !== i)
+                        a.filter(
+                          (_, j) =>
+                            j !== i
+                        )
                       )
                     }
                     className="text-red-600"
                   >
-                    <Trash2 className="inline w-4 h-4" /> Delete
+                    <Trash2 className="inline w-4 h-4" />{" "}
+                    Delete
                   </button>
                 </div>
               ))}
 
               <button
+                type="button"
                 onClick={() =>
                   setSch((a) => [
                     ...a,
                     {
                       day: "Sunday",
                       time: "",
-                      name_en: "New service",
-                      name_ta: "புதிய ஆராதனை",
-                      location_en: "",
-                      location_ta: "",
-                      sort_order: a.length,
+                      name_en:
+                        "New service",
+                      name_ta:
+                        "புதிய ஆராதனை",
+                      location_en:
+                        "",
+                      location_ta:
+                        "",
+                      sort_order:
+                        a.length,
                     },
                   ])
                 }
                 className="border border-border rounded-lg px-4 py-2"
               >
-                <Plus className="inline w-4 h-4" /> Add service
+                <Plus className="inline w-4 h-4" />{" "}
+                Add service
               </button>
             </div>
           )}
@@ -850,48 +1133,60 @@ export default function AdminDashboard() {
                 >
                   <div className="grid md:grid-cols-3 gap-3">
                     <Input
-                      value={x.event_date}
+                      value={
+                        x.event_date
+                      }
                       onChange={(v) =>
                         setEv((a) =>
-                          a.map((z, j) =>
-                            j === i
-                              ? {
-                                  ...z,
-                                  event_date: v,
-                                }
-                              : z
+                          a.map(
+                            (z, j) =>
+                              j === i
+                                ? {
+                                    ...z,
+                                    event_date:
+                                      v,
+                                  }
+                                : z
                           )
                         )
                       }
                     />
 
                     <Input
-                      value={x.title_en}
+                      value={
+                        x.title_en
+                      }
                       onChange={(v) =>
                         setEv((a) =>
-                          a.map((z, j) =>
-                            j === i
-                              ? {
-                                  ...z,
-                                  title_en: v,
-                                }
-                              : z
+                          a.map(
+                            (z, j) =>
+                              j === i
+                                ? {
+                                    ...z,
+                                    title_en:
+                                      v,
+                                  }
+                                : z
                           )
                         )
                       }
                     />
 
                     <Input
-                      value={x.title_ta}
+                      value={
+                        x.title_ta
+                      }
                       onChange={(v) =>
                         setEv((a) =>
-                          a.map((z, j) =>
-                            j === i
-                              ? {
-                                  ...z,
-                                  title_ta: v,
-                                }
-                              : z
+                          a.map(
+                            (z, j) =>
+                              j === i
+                                ? {
+                                    ...z,
+                                    title_ta:
+                                      v,
+                                  }
+                                : z
                           )
                         )
                       }
@@ -900,96 +1195,120 @@ export default function AdminDashboard() {
 
                   <div className="grid md:grid-cols-2 gap-3">
                     <Input
-                      value={x.time_en}
+                      value={
+                        x.time_en
+                      }
                       onChange={(v) =>
                         setEv((a) =>
-                          a.map((z, j) =>
-                            j === i
-                              ? {
-                                  ...z,
-                                  time_en: v,
-                                }
-                              : z
+                          a.map(
+                            (z, j) =>
+                              j === i
+                                ? {
+                                    ...z,
+                                    time_en:
+                                      v,
+                                  }
+                                : z
                           )
                         )
                       }
                     />
 
                     <Input
-                      value={x.time_ta}
+                      value={
+                        x.time_ta
+                      }
                       onChange={(v) =>
                         setEv((a) =>
-                          a.map((z, j) =>
-                            j === i
-                              ? {
-                                  ...z,
-                                  time_ta: v,
-                                }
-                              : z
+                          a.map(
+                            (z, j) =>
+                              j === i
+                                ? {
+                                    ...z,
+                                    time_ta:
+                                      v,
+                                  }
+                                : z
                           )
                         )
                       }
                     />
 
                     <Input
-                      value={x.location_en}
+                      value={
+                        x.location_en
+                      }
                       onChange={(v) =>
                         setEv((a) =>
-                          a.map((z, j) =>
-                            j === i
-                              ? {
-                                  ...z,
-                                  location_en: v,
-                                }
-                              : z
+                          a.map(
+                            (z, j) =>
+                              j === i
+                                ? {
+                                    ...z,
+                                    location_en:
+                                      v,
+                                  }
+                                : z
                           )
                         )
                       }
                     />
 
                     <Input
-                      value={x.location_ta}
+                      value={
+                        x.location_ta
+                      }
                       onChange={(v) =>
                         setEv((a) =>
-                          a.map((z, j) =>
-                            j === i
-                              ? {
-                                  ...z,
-                                  location_ta: v,
-                                }
-                              : z
+                          a.map(
+                            (z, j) =>
+                              j === i
+                                ? {
+                                    ...z,
+                                    location_ta:
+                                      v,
+                                  }
+                                : z
                           )
                         )
                       }
                     />
 
                     <Input
-                      value={x.description_en}
+                      value={
+                        x.description_en
+                      }
                       onChange={(v) =>
                         setEv((a) =>
-                          a.map((z, j) =>
-                            j === i
-                              ? {
-                                  ...z,
-                                  description_en: v,
-                                }
-                              : z
+                          a.map(
+                            (z, j) =>
+                              j === i
+                                ? {
+                                    ...z,
+                                    description_en:
+                                      v,
+                                  }
+                                : z
                           )
                         )
                       }
                     />
 
                     <Input
-                      value={x.description_ta}
+                      value={
+                        x.description_ta
+                      }
                       onChange={(v) =>
                         setEv((a) =>
-                          a.map((z, j) =>
-                            j === i
-                              ? {
-                                  ...z,
-                                  description_ta: v,
-                                }
-                              : z
+                          a.map(
+                            (z, j) =>
+                              j === i
+                                ? {
+                                    ...z,
+                                    description_ta:
+                                      v,
+                                  }
+                                : z
                           )
                         )
                       }
@@ -1000,17 +1319,22 @@ export default function AdminDashboard() {
                     <label className="text-sm">
                       <input
                         type="checkbox"
-                        checked={x.featured}
+                        checked={Boolean(
+                          x.featured
+                        )}
                         onChange={(e) =>
                           setEv((a) =>
-                            a.map((z, j) =>
-                              j === i
-                                ? {
-                                    ...z,
-                                    featured:
-                                      e.target.checked,
-                                  }
-                                : z
+                            a.map(
+                              (z, j) =>
+                                j === i
+                                  ? {
+                                      ...z,
+                                      featured:
+                                        e
+                                          .target
+                                          .checked,
+                                    }
+                                  : z
                             )
                           )
                         }
@@ -1020,45 +1344,72 @@ export default function AdminDashboard() {
                     </label>
 
                     <button
+                      type="button"
                       onClick={() =>
                         setEv((a) =>
                           a.filter(
-                            (_, j) => j !== i
+                            (_, j) =>
+                              j !== i
                           )
                         )
                       }
                       className="text-red-600"
                     >
-                      <Trash2 className="inline w-4 h-4" /> Delete event
+                      <Trash2 className="inline w-4 h-4" />{" "}
+                      Delete event
                     </button>
                   </div>
                 </div>
               ))}
 
               <button
+                type="button"
                 onClick={() =>
                   setEv((a) => [
                     ...a,
                     {
-                      event_date: new Date()
-                        .toISOString()
-                        .slice(0, 10),
-                      title_en: "New event",
-                      title_ta: "புதிய நிகழ்வு",
+                      event_date:
+                        new Date()
+                          .toISOString()
+                          .slice(
+                            0,
+                            10
+                          ),
+
+                      title_en:
+                        "New event",
+
+                      title_ta:
+                        "புதிய நிகழ்வு",
+
                       time_en: "",
+
                       time_ta: "",
-                      location_en: "",
-                      location_ta: "",
-                      description_en: "",
-                      description_ta: "",
-                      featured: false,
-                      sort_order: a.length,
+
+                      location_en:
+                        "",
+
+                      location_ta:
+                        "",
+
+                      description_en:
+                        "",
+
+                      description_ta:
+                        "",
+
+                      featured:
+                        false,
+
+                      sort_order:
+                        a.length,
                     },
                   ])
                 }
                 className="border border-border rounded-lg px-4 py-2"
               >
-                <Plus className="inline w-4 h-4" /> Add event
+                <Plus className="inline w-4 h-4" />{" "}
+                Add event
               </button>
             </div>
           )}
