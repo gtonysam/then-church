@@ -1,6 +1,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
+import Messages from "./Messages";
 import {
   LogOut,
   Save,
@@ -507,6 +508,7 @@ export default function AdminDashboard() {
     ...Object.keys(groups),
     "Weekly Schedule",
     "Events",
+    "Messages",
   ];
 
   const heroImage = draft["site.heroImage"] || "";
@@ -615,6 +617,8 @@ export default function AdminDashboard() {
             </div>
           )}
 
+          {tab === "Messages" && <Messages />}
+          
           {/* SITE */}
           {tab === "Site" && (
             <div className="space-y-7">
