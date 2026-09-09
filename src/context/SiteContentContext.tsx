@@ -64,6 +64,7 @@ type ContextType = {
   content: Record<string, string>;
   schedule: ScheduleItem[];
   events: EventItem[];
+  churchId: number | null;
   loading: boolean;
   refresh: () => Promise<void>;
   t: (key: string, lang: Language) => string;
@@ -87,41 +88,90 @@ export function SiteContentProvider({ children }: { children: ReactNode }) {
   const [schedule, setSchedule] = useState(defaultSchedule);
   const [events, setEvents] = useState(defaultEvents);
   const [loading, setLoading] = useState(true);
+  const [churchId, setChurchId] =
+  useState<number | null>(null);
 
 const refresh = async () => {
   try {
-    const [siteRows, scheduleRows, eventRows] = await Promise.all([
-      get("site_content?select=content&id=eq.1&limit=1"),
-      get("schedule_items?select=*&order=sort_order.asc"),
-      get("events?select=*&order=event_date.asc,sort_order.asc"),
-    ]);
+    const [siteRows, scheduleRows, eventRows] =
+      await Promise.all([
+        get(
+          "site_content?select=content,church_id&id=eq.1&limit=1"
+        ),
+        get(
+          "schedule_items?select=*&order=sort_order.asc"
+        ),
+        get(
+          "events?select=*&order=event_date.asc,sort_order.asc"
+        ),
+      ]);
 
-    if (siteRows?.[0]?.content) {
-      setContent({
-        ...fallback,
-        ...siteRows[0].content,
-      });
+    if (siteRows?.[0]) {
+      const currentChurchId =
+        Number(siteRows[0].church_id);
+
+      if (Number.isFinite(currentChurchId)) {
+        setChurchId(currentChurchId);
+      }
+
+      if (siteRows[0].content) {
+        setContent({
+          ...fallback,
+          ...siteRows[0].content,
+        });
+      }
     }
 
-    if (Array.isArray(scheduleRows) && scheduleRows.length) {
+    if (
+      Array.isArray(scheduleRows) &&
+      scheduleRows.length
+    ) {
       setSchedule(scheduleRows);
     }
 
-    if (Array.isArray(eventRows) && eventRows.length) {
+    if (
+      Array.isArray(eventRows) &&
+      eventRows.length
+    ) {
       setEvents(eventRows);
     }
   } catch (error) {
-    console.error("Failed to load site content:", error);
+    console.error(
+      "Failed to load site content:",
+      error
+    );
   } finally {
     setLoading(false);
   }
 };
   useEffect(() => { refresh(); }, []);
 
-  const value = useMemo(() => ({
-    content, schedule, events, loading, refresh,
-    t: (key: string, lang: Language) => content[`${lang}.${key}`] ?? defaultTranslations[lang][key] ?? content[key] ?? key,
-  }), [content, schedule, events, loading]);
+ const value = useMemo(
+  () => ({
+    content,
+    schedule,
+    events,
+    churchId,
+    loading,
+    refresh,
+
+    t: (
+      key: string,
+      lang: Language
+    ) =>
+      content[`${lang}.${key}`] ??
+      defaultTranslations[lang][key] ??
+      content[key] ??
+      key,
+  }),
+  [
+    content,
+    schedule,
+    events,
+    churchId,
+    loading,
+  ]
+);
 
   return <SiteContentContext.Provider value={value}>{children}</SiteContentContext.Provider>;
 }

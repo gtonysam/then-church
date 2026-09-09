@@ -15,7 +15,7 @@ import { post } from "@/lib/supabase";
 
 export default function ContactSection() {
   const { t } = useContentLang();
-  const { content } = useSiteContent();
+  const { content, churchId } = useSiteContent();
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -28,59 +28,71 @@ export default function ContactSection() {
     text: string;
   } | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+ const handleSubmit = async (
+  e: React.FormEvent<HTMLFormElement>
+) => {
+  e.preventDefault();
 
-    setStatus(null);
+  setStatus(null);
 
-    if (!firstName.trim()) {
-      setStatus({
-        type: "error",
-        text: "Please enter your first name.",
-      });
-      return;
+  if (!firstName.trim()) {
+    setStatus({
+      type: "error",
+      text: "Please enter your first name.",
+    });
+    return;
+  }
+
+  if (!message.trim()) {
+    setStatus({
+      type: "error",
+      text: "Please enter your message.",
+    });
+    return;
+  }
+
+  setSending(true);
+
+  try {
+    if (churchId === null) {
+      throw new Error(
+        "Unable to determine the church for this website."
+      );
     }
 
-    if (!message.trim()) {
-      setStatus({
-        type: "error",
-        text: "Please enter your message.",
-      });
-      return;
-    }
+    await post("contact_messages", {
+      first_name: firstName.trim(),
+      last_name: lastName.trim() || null,
+      email: email.trim() || null,
+      message: message.trim(),
+      church_id: churchId,
+    }, "return=minimal");
 
-    setSending(true);
+    setFirstName("");
+    setLastName("");
+    setEmail("");
+    setMessage("");
 
-    try {
-      await post("contact_messages", {
-        first_name: firstName.trim(),
-        last_name: lastName.trim() || null,
-        email: email.trim() || null,
-        message: message.trim(),
-      });
+    setStatus({
+      type: "success",
+      text: "Thank you. Your message has been sent successfully.",
+    });
+  } catch (error: any) {
+    console.error(
+      "Contact message error:",
+      error
+    );
 
-      setFirstName("");
-      setLastName("");
-      setEmail("");
-      setMessage("");
-
-      setStatus({
-        type: "success",
-        text: "Thank you. Your message has been sent successfully.",
-      });
-    } catch (error: any) {
-      console.error("Contact message error:", error);
-
-      setStatus({
-        type: "error",
-        text:
-          error?.message ||
-          "Unable to send your message. Please try again.",
-      });
-    } finally {
-      setSending(false);
-    }
-  };
+    setStatus({
+      type: "error",
+      text:
+        error?.message ||
+        "Unable to send your message. Please try again.",
+    });
+  } finally {
+    setSending(false);
+  }
+};
 
   return (
     <section id="contact" className="py-24 bg-navy">

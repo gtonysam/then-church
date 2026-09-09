@@ -58,22 +58,17 @@ const groups: Record<string, string[]> = {
     "about.ref",
   ],
 
-  Schedule: [
+  // IMPORTANT:
+  // This is your old Schedule content.
+  // Nothing has been removed.
+  // It is now displayed under "Monthly Highlights".
+  "Monthly Highlights": [
     "schedule.eyebrow",
     "schedule.title1",
     "schedule.title2",
     "schedule.sub",
     "schedule.monthly.title1",
     "schedule.monthly.title2",
-    "schedule.m1.date",
-    "schedule.m1.name",
-    "schedule.m1.desc",
-    "schedule.m2.date",
-    "schedule.m2.name",
-    "schedule.m2.desc",
-    "schedule.m3.date",
-    "schedule.m3.name",
-    "schedule.m3.desc",
   ],
 
   Events: [
@@ -343,6 +338,93 @@ function HeroImageUploader({
   );
 }
 
+interface MonthlyHighlight {
+  date: string;
+  name_en: string;
+  name_ta: string;
+  desc_en: string;
+  desc_ta: string;
+}
+
+function normalizeMonthlyHighlight(
+  item?: Partial<MonthlyHighlight>
+): MonthlyHighlight {
+  return {
+    date: item?.date || "",
+    name_en: item?.name_en || "",
+    name_ta: item?.name_ta || "",
+    desc_en: item?.desc_en || "",
+    desc_ta: item?.desc_ta || "",
+  };
+}
+
+function getMonthlyHighlights(
+  content: Record<string, string>
+): MonthlyHighlight[] {
+  /*
+   * First try the new dynamic JSON value.
+   */
+  const stored = content["schedule.monthlyHighlights"];
+
+  if (stored) {
+    try {
+      const parsed = JSON.parse(stored);
+
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) =>
+          normalizeMonthlyHighlight(item)
+        );
+      }
+    } catch {
+      console.warn(
+        "Could not parse schedule.monthlyHighlights"
+      );
+    }
+  }
+
+  /*
+   * Backwards compatibility:
+   * Read the existing m1/m2/m3 values.
+   *
+   * This means your existing database content
+   * will NOT be lost.
+   */
+  const legacy: MonthlyHighlight[] = [];
+
+  for (let i = 1; i <= 3; i++) {
+    const item = normalizeMonthlyHighlight({
+      date:
+        content[`en.schedule.m${i}.date`] ||
+        content[`ta.schedule.m${i}.date`] ||
+        "",
+
+      name_en:
+        content[`en.schedule.m${i}.name`] || "",
+
+      name_ta:
+        content[`ta.schedule.m${i}.name`] || "",
+
+      desc_en:
+        content[`en.schedule.m${i}.desc`] || "",
+
+      desc_ta:
+        content[`ta.schedule.m${i}.desc`] || "",
+    });
+
+    if (
+      item.date ||
+      item.name_en ||
+      item.name_ta ||
+      item.desc_en ||
+      item.desc_ta
+    ) {
+      legacy.push(item);
+    }
+  }
+
+  return legacy;
+}
+
 export default function AdminDashboard() {
   const nav = useNavigate();
 
@@ -365,6 +447,9 @@ export default function AdminDashboard() {
 
   const [ev, setEv] =
     useState<EventItem[]>(events);
+
+  const [monthlyHighlights, setMonthlyHighlights] =
+  useState<MonthlyHighlight[]>([]);
 
   const [saving, setSaving] = useState(false);
 
@@ -407,6 +492,12 @@ export default function AdminDashboard() {
     setEv(events);
   }, [events]);
 
+  useEffect(() => {
+  setMonthlyHighlights(
+    getMonthlyHighlights(content)
+  );
+}, [content]);
+
   const keys = useMemo(
     () => groups[tab] || [],
     [tab]
@@ -442,7 +533,10 @@ export default function AdminDashboard() {
    *        ↓
    * site_content
    */
-  const saveContent = async () => {
+  const saveContent = async (
+  contentToSave = draft,
+  successMessage = "Content saved successfully."
+) => {
     const session = getSession();
 
     if (!session?.access_token) {
@@ -495,7 +589,7 @@ export default function AdminDashboard() {
           String(siteContentId)
         )}&church_id=eq.${churchId}`,
         {
-          content: draft,
+          content: contentToSave,
           updated_at:
             new Date().toISOString(),
         }
@@ -503,9 +597,7 @@ export default function AdminDashboard() {
 
       await refresh();
 
-      setMessage(
-        "Content saved successfully."
-      );
+      setMessage(successMessage);
     } catch (e: any) {
       console.error(
         "SAVE CONTENT ERROR:",
@@ -520,6 +612,149 @@ export default function AdminDashboard() {
       setSaving(false);
     }
   };
+
+
+
+  const saveMonthlyHighlights = async () => {
+  const session = getSession();
+
+  if (!session?.access_token) {
+    setMessage(
+      "Your session has expired. Please sign in again."
+    );
+    return;
+  }
+
+  setSaving(true);
+  setMessage("");
+
+  try {
+    /*
+     * Current church is always determined dynamically.
+     */
+    const churchId =
+      await getCurrentChurchId();
+
+    console.log(
+      "Saving monthly highlights for church:",
+      churchId
+    );
+
+    /*
+     * Store unlimited highlights inside the
+     * existing site_content.content object.
+     *
+     * No new database table is required.
+     */
+    const nextDraft = {
+      ...draft,
+
+      "schedule.monthlyHighlights":
+        JSON.stringify(monthlyHighlights),
+    };
+
+    /*
+     * Keep the old m1/m2/m3 fields too.
+     *
+     * This is important because your existing
+     * public website may still read those fields.
+     *
+     * Therefore this change does not break
+     * your current website.
+     */
+    for (let i = 1; i <= 3; i++) {
+      const item =
+        monthlyHighlights[i - 1];
+
+      nextDraft[
+        `en.schedule.m${i}.date`
+      ] = item?.date || "";
+
+      nextDraft[
+        `ta.schedule.m${i}.date`
+      ] = item?.date || "";
+
+      nextDraft[
+        `en.schedule.m${i}.name`
+      ] = item?.name_en || "";
+
+      nextDraft[
+        `ta.schedule.m${i}.name`
+      ] = item?.name_ta || "";
+
+      nextDraft[
+        `en.schedule.m${i}.desc`
+      ] = item?.desc_en || "";
+
+      nextDraft[
+        `ta.schedule.m${i}.desc`
+      ] = item?.desc_ta || "";
+    }
+
+    /*
+     * Find this church's existing site_content row.
+     */
+    const rows = await get(
+      `site_content?church_id=eq.${churchId}&select=id&limit=1`
+    );
+
+    if (
+      !Array.isArray(rows) ||
+      rows.length === 0
+    ) {
+      throw new Error(
+        "No site content record exists for this church."
+      );
+    }
+
+    const siteContentId = rows[0]?.id;
+
+    if (
+      siteContentId === null ||
+      siteContentId === undefined
+    ) {
+      throw new Error(
+        "Unable to determine the site content record."
+      );
+    }
+
+    await patch(
+      `site_content?id=eq.${encodeURIComponent(
+        String(siteContentId)
+      )}&church_id=eq.${churchId}`,
+      {
+        content: nextDraft,
+        updated_at:
+          new Date().toISOString(),
+      }
+    );
+
+    /*
+     * Keep local state synchronized.
+     */
+    setDraft(nextDraft);
+
+    await refresh();
+
+    setMessage(
+      "Monthly highlights saved successfully."
+    );
+  } catch (e: any) {
+    console.error(
+      "SAVE MONTHLY HIGHLIGHTS ERROR:",
+      e
+    );
+
+    setMessage(
+      e?.message ||
+        e?.details ||
+        "Failed to save monthly highlights."
+    );
+  } finally {
+    setSaving(false);
+  }
+};
+
 
   /**
    * Save weekly schedule.
@@ -739,12 +974,17 @@ export default function AdminDashboard() {
     );
   };
 
-  const tabs = [
-    ...Object.keys(groups),
-    "Weekly Schedule",
-    //"Events",
-    "Messages",
-  ];
+ const tabs = [
+  "Site",
+  "Hero",
+  "About",
+  "Monthly Highlights",
+  "Weekly Schedule",
+  "Events",
+  "Contact",
+  "Footer",
+  "Messages",
+];
 
   const heroImage =
     draft["site.heroImage"] || "";
@@ -817,43 +1057,55 @@ export default function AdminDashboard() {
               </h2>
             </div>
 
-            {tab === "Weekly Schedule" ? (
-              <button
-                onClick={saveSchedules}
-                disabled={saving}
-                className="bg-gold px-5 py-2.5 rounded-full font-bold"
-              >
-                <Save className="inline w-4 h-4 mr-1" />
+           {tab === "Weekly Schedule" ? (
+  <button
+    onClick={saveSchedules}
+    disabled={saving}
+    className="bg-gold px-5 py-2.5 rounded-full font-bold"
+  >
+    <Save className="inline w-4 h-4 mr-1" />
 
-                {saving
-                  ? "Saving…"
-                  : "Save schedule"}
-              </button>
-            ) : tab === "Events" ? (
-              <button
-                onClick={saveEvents}
-                disabled={saving}
-                className="bg-gold px-5 py-2.5 rounded-full font-bold"
-              >
-                <Save className="inline w-4 h-4 mr-1" />
+    {saving
+      ? "Saving…"
+      : "Save schedule"}
+  </button>
+) : tab === "Monthly Highlights" ? (
+  <button
+    onClick={saveMonthlyHighlights}
+    disabled={saving}
+    className="bg-gold px-5 py-2.5 rounded-full font-bold"
+  >
+    <Save className="inline w-4 h-4 mr-1" />
 
-                {saving
-                  ? "Saving…"
-                  : "Save events"}
-              </button>
-            ) : tab === "Messages" ? null : (
-              <button
-                onClick={saveContent}
-                disabled={saving}
-                className="bg-gold px-5 py-2.5 rounded-full font-bold"
-              >
-                <Save className="inline w-4 h-4 mr-1" />
+    {saving
+      ? "Saving…"
+      : "Save highlights"}
+  </button>
+) : tab === "Events" ? (
+  <button
+    onClick={saveEvents}
+    disabled={saving}
+    className="bg-gold px-5 py-2.5 rounded-full font-bold"
+  >
+    <Save className="inline w-4 h-4 mr-1" />
 
-                {saving
-                  ? "Saving…"
-                  : "Save content"}
-              </button>
-            )}
+    {saving
+      ? "Saving…"
+      : "Save events"}
+  </button>
+) : tab === "Messages" ? null : (
+  <button
+    onClick={() => saveContent()}
+    disabled={saving}
+    className="bg-gold px-5 py-2.5 rounded-full font-bold"
+  >
+    <Save className="inline w-4 h-4 mr-1" />
+
+    {saving
+      ? "Saving…"
+      : "Save content"}
+  </button>
+)}
           </div>
 
           {message && (
@@ -922,7 +1174,7 @@ export default function AdminDashboard() {
 
           {/* OTHER CONTENT GROUPS */}
           {groups[tab] &&
-            tab !== "Site" && (
+            tab !== "Site" &&   tab !== "Monthly Highlights" && (
               <div className="grid md:grid-cols-2 gap-5">
                 {keys.map((key) => (
                   <div key={key}>
@@ -1123,6 +1375,339 @@ export default function AdminDashboard() {
             </div>
           )}
 
+{/* MONTHLY HIGHLIGHTS */}
+{/* MONTHLY HIGHLIGHTS */}
+{tab === "Monthly Highlights" && (
+  <div className="space-y-6">
+
+    {/* Existing Schedule content */}
+    <div className="grid md:grid-cols-2 gap-5">
+      {keys.map((key) => (
+        <div key={key}>
+          <label className="block text-xs uppercase tracking-wider text-muted-foreground mb-1.5">
+            {key}
+          </label>
+
+          <Input
+            value={
+              draft[`en.${key}`] || ""
+            }
+            onChange={(v) =>
+              setDraft((d) => ({
+                ...d,
+                [`en.${key}`]: v,
+              }))
+            }
+            multiline={isLong(key)}
+          />
+
+          <div className="mt-2">
+            <label className="block text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
+              Tamil / தமிழ்
+            </label>
+
+            <Input
+              value={
+                draft[`ta.${key}`] || ""
+              }
+              onChange={(v) =>
+                setDraft((d) => ({
+                  ...d,
+                  [`ta.${key}`]: v,
+                }))
+              }
+              multiline={isLong(key)}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+
+    {/* MONTHLY HIGHLIGHTS MANAGEMENT */}
+    <div className="border-t border-border pt-6">
+
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="font-display text-xl font-bold">
+            Monthly Highlights / மாத சிறப்பம்சங்கள்
+          </h3>
+
+          <p className="text-sm text-muted-foreground mt-1">
+            Add, edit or delete the monthly highlights shown on the website.
+            <br />
+            இணையதளத்தில் காட்டப்படும் மாத சிறப்பம்சங்களைச் சேர்க்கவும்,
+            திருத்தவும் அல்லது நீக்கவும்.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() =>
+            setMonthlyHighlights((items) => [
+              ...items,
+              {
+                date: new Date()
+                  .toISOString()
+                  .slice(0, 10),
+
+                name_en:
+                  "New monthly highlight",
+
+                name_ta:
+                  "புதிய மாத சிறப்பம்சம்",
+
+                desc_en: "",
+
+                desc_ta: "",
+              },
+            ])
+          }
+          className="border border-border rounded-lg px-4 py-2 font-semibold hover:bg-muted whitespace-nowrap"
+        >
+          <Plus className="inline w-4 h-4 mr-1" />
+          Add Highlight / சேர்க்க
+        </button>
+      </div>
+
+      {/* No highlights */}
+      {monthlyHighlights.length === 0 && (
+        <div className="border border-dashed border-border rounded-xl p-8 text-center text-sm text-muted-foreground">
+
+          <p>
+            No monthly highlights yet.
+            <br />
+            இதுவரை மாத சிறப்பம்சங்கள் எதுவும் இல்லை.
+          </p>
+
+          <div className="mt-4">
+            <button
+              type="button"
+              onClick={() =>
+                setMonthlyHighlights([
+                  {
+                    date: new Date()
+                      .toISOString()
+                      .slice(0, 10),
+
+                    name_en:
+                      "New monthly highlight",
+
+                    name_ta:
+                      "புதிய மாத சிறப்பம்சம்",
+
+                    desc_en: "",
+
+                    desc_ta: "",
+                  },
+                ])
+              }
+              className="border border-border rounded-lg px-4 py-2 font-semibold hover:bg-muted"
+            >
+              <Plus className="inline w-4 h-4 mr-1" />
+              Add First Highlight / முதல் சிறப்பம்சத்தைச் சேர்க்க
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Highlight cards */}
+      <div className="space-y-5">
+
+        {monthlyHighlights.map((item, i) => (
+          <div
+            key={i}
+            className="border border-border rounded-xl p-5 space-y-4"
+          >
+
+            {/* Highlight heading + delete */}
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold">
+                Highlight {i + 1} / சிறப்பம்சம் {i + 1}
+              </h4>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setMonthlyHighlights((items) =>
+                    items.filter(
+                      (_, index) =>
+                        index !== i
+                    )
+                  )
+                }
+                className="text-red-600 hover:text-red-700"
+              >
+                <Trash2 className="inline w-4 h-4 mr-1" />
+                Delete / நீக்கு
+              </button>
+            </div>
+
+            {/* DATE */}
+            {/* DATE */}
+<div>
+  <label className="block text-xs uppercase tracking-wider text-muted-foreground mb-1.5">
+    Date
+  </label>
+
+  <Input
+    value={item.date}
+    onChange={(v) =>
+      setMonthlyHighlights(
+        (items) =>
+          items.map(
+            (x, index) =>
+              index === i
+                ? {
+                    ...x,
+                    date: v,
+                  }
+                : x
+          )
+      )
+    }
+  />
+
+  <div className="mt-2">
+    <label className="block text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
+      Tamil
+    </label>
+
+    <Input
+      value={item.date}
+      onChange={(v) =>
+        setMonthlyHighlights(
+          (items) =>
+            items.map(
+              (x, index) =>
+                index === i
+                  ? {
+                      ...x,
+                      date: v,
+                    }
+                  : x
+            )
+        )
+      }
+    />
+  </div>
+</div>
+            {/* TITLES */}
+            <div className="grid md:grid-cols-2 gap-4">
+
+              {/* English title */}
+              <div>
+                <label className="block text-xs uppercase tracking-wider text-muted-foreground mb-1.5">
+                  English Title / ஆங்கில தலைப்பு
+                </label>
+
+                <Input
+                  value={item.name_en}
+                  onChange={(v) =>
+                    setMonthlyHighlights(
+                      (items) =>
+                        items.map(
+                          (x, index) =>
+                            index === i
+                              ? {
+                                  ...x,
+                                  name_en: v,
+                                }
+                              : x
+                        )
+                    )
+                  }
+                />
+              </div>
+
+              {/* Tamil title */}
+              <div>
+                <label className="block text-xs uppercase tracking-wider text-muted-foreground mb-1.5">
+                  Tamil Title / தமிழ் தலைப்பு
+                </label>
+
+                <Input
+                  value={item.name_ta}
+                  onChange={(v) =>
+                    setMonthlyHighlights(
+                      (items) =>
+                        items.map(
+                          (x, index) =>
+                            index === i
+                              ? {
+                                  ...x,
+                                  name_ta: v,
+                                }
+                              : x
+                        )
+                    )
+                  }
+                />
+              </div>
+            </div>
+
+            {/* DESCRIPTIONS */}
+            <div className="grid md:grid-cols-2 gap-4">
+
+              {/* English description */}
+              <div>
+                <label className="block text-xs uppercase tracking-wider text-muted-foreground mb-1.5">
+                  English Description / ஆங்கில விளக்கம்
+                </label>
+
+                <Input
+                  value={item.desc_en}
+                  onChange={(v) =>
+                    setMonthlyHighlights(
+                      (items) =>
+                        items.map(
+                          (x, index) =>
+                            index === i
+                              ? {
+                                  ...x,
+                                  desc_en: v,
+                                }
+                              : x
+                        )
+                    )
+                  }
+                  multiline
+                />
+              </div>
+
+              {/* Tamil description */}
+              <div>
+                <label className="block text-xs uppercase tracking-wider text-muted-foreground mb-1.5">
+                  Tamil Description / தமிழ் விளக்கம்
+                </label>
+
+                <Input
+                  value={item.desc_ta}
+                  onChange={(v) =>
+                    setMonthlyHighlights(
+                      (items) =>
+                        items.map(
+                          (x, index) =>
+                            index === i
+                              ? {
+                                  ...x,
+                                  desc_ta: v,
+                                }
+                              : x
+                        )
+                    )
+                  }
+                  multiline
+                />
+              </div>
+
+            </div>
+          </div>
+        ))}
+
+      </div>
+    </div>
+  </div>
+)}
           {/* EVENTS */}
           {tab === "Events" && (
             <div className="space-y-5">

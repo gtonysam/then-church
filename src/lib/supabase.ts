@@ -272,19 +272,27 @@ export async function get(path: string) {
  */
 export async function post(
   path: string,
-  body: any
+  body: any,
+  prefer = "return=representation"
 ) {
   if (!supabaseConfigured) {
     return null;
   }
+
+  const session = getSession();
+
+  const authorization =
+    session?.access_token
+      ? `Bearer ${session.access_token}`
+      : `Bearer ${SUPABASE_ANON_KEY}`;
 
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/${path}`,
     {
       method: "POST",
       headers: headers({
-        ...authHeader(),
-        Prefer: "return=representation",
+        Authorization: authorization,
+        Prefer: prefer,
       }),
       body: JSON.stringify(body),
     }
@@ -302,6 +310,10 @@ export async function post(
         res.statusText
       }`
     );
+  }
+
+  if (prefer === "return=minimal") {
+    return null;
   }
 
   return res.json();
